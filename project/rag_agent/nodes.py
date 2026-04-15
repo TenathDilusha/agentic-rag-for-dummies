@@ -25,6 +25,7 @@ def summarize_history(state: State, llm):
         conversation += f"{role}: {msg.content}\n"
 
     summary_response = llm.with_config(temperature=0.2).invoke([SystemMessage(content=get_conversation_summary_prompt()), HumanMessage(content=conversation)])
+    print(summary_response.content)
     return {"conversation_summary": summary_response.content, "agent_answers": [{"__reset__": True}]}
 
 def rewrite_query(state: State, llm):
@@ -38,9 +39,11 @@ def rewrite_query(state: State, llm):
 
     if response.questions and response.is_clear:
         delete_all = [RemoveMessage(id=m.id) for m in state["messages"] if not isinstance(m, SystemMessage)]
+        print("Rewritten Questions:", response.questions)
         return {"questionIsClear": True, "messages": delete_all, "originalQuery": last_message.content, "rewrittenQuestions": response.questions}
 
     clarification = response.clarification_needed if response.clarification_needed and len(response.clarification_needed.strip()) > 10 else "I need more information to understand your question."
+    print("Clarification Needed:", clarification)
     return {"questionIsClear": False, "messages": [AIMessage(content=clarification)]}
 
 def request_clarification(state: State):
@@ -62,6 +65,7 @@ def orchestrator(state: AgentState, llm_with_tools):
 
     response = llm_with_tools.invoke([sys_msg] + summary_injection + state["messages"])
     tool_calls = response.tool_calls if hasattr(response, "tool_calls") else []
+    print("Tool Calls:", tool_calls)
     return {"messages": [response], "tool_call_count": len(tool_calls) if tool_calls else 0, "iteration_count": 1}
 
 def fallback_response(state: AgentState, llm):
@@ -91,6 +95,7 @@ def fallback_response(state: AgentState, llm):
         f"INSTRUCTION:\nProvide the best possible answer using only the data above."
     )
     response = llm.invoke([SystemMessage(content=get_fallback_response_prompt()), HumanMessage(content=prompt_content)])
+    print("Fallback Response:", response.content)
     return {"messages": [response]}
 
 def should_compress_context(state: AgentState) -> Command[Literal["compress_context", "orchestrator"]]:
@@ -122,6 +127,7 @@ def should_compress_context(state: AgentState) -> Command[Literal["compress_cont
     max_allowed = BASE_TOKEN_THRESHOLD + int(current_token_summary * TOKEN_GROWTH_FACTOR)
 
     goto = "compress_context" if current_tokens > max_allowed else "orchestrator"
+    print(f"Context Tokens: {current_tokens}, Max Allowed: {max_allowed}, Goto: {goto}")
     return Command(update={"retrieval_keys": updated_ids}, goto=goto)
 
 def compress_context(state: AgentState, llm):
@@ -161,12 +167,14 @@ def compress_context(state: AgentState, llm):
             block += "Search queries already run:\n" + "\n".join(f"- {q}" for q in search_queries) + "\n"
         new_summary += block
 
+    print("Compressed Context:", new_summary)
     return {"context_summary": new_summary, "messages": [RemoveMessage(id=m.id) for m in messages[1:]]}
 
 def collect_answer(state: AgentState):
     last_message = state["messages"][-1]
     is_valid = isinstance(last_message, AIMessage) and last_message.content and not last_message.tool_calls
     answer = last_message.content if is_valid else "Unable to generate an answer."
+    print("Final Answer:", answer)
     return {
         "final_answer": answer,
         "agent_answers": [{"index": state["question_index"], "question": state["question"], "answer": answer}]
@@ -185,4 +193,5 @@ def aggregate_answers(state: State, llm):
 
     user_message = HumanMessage(content=f"""Original user question: {state["originalQuery"]}\nRetrieved answers:{formatted_answers}""")
     synthesis_response = llm.invoke([SystemMessage(content=get_aggregation_prompt()), user_message])
+    print("Aggregated Response:", synthesis_response.content)
     return {"messages": [AIMessage(content=synthesis_response.content)]}
